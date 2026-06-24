@@ -50,25 +50,48 @@ jobs:
         with:
           shared-key: warp-oss-windows
 
-      - name: Build warp-oss
+      # OSS channel feature set (from script/windows/bundle.ps1):
+      #   release_bundle -> embeds fonts/assets into the binary (rust-embed/debug-embed)
+      #                     so it runs standalone, no on-disk font dir needed.
+      #   gui            -> the desktop UI.
+      #   nld_classifier_v3,nld_heuristic_v2 -> shipped input classifier.
+      # OSS deliberately omits crash_reporting (no Sentry SDK at all).
+      - name: Build warp-oss (OSS channel features)
         shell: bash
         env:
-          # Lets the Sentry SDK build step (still a compile-time dependency, even
-          # though we never initialize it) fetch its binaries without rate limits.
+          # build.rs reads this to place conpty.dll etc. next to the binary.
+          CARGO_FULL_PROFILE: ${{ inputs.profile == 'release' && 'release' || 'debug' }}
+          # Lets any GitHub-hosted build dep download without API rate limits.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          FEATURES="release_bundle,gui,nld_classifier_v3,nld_heuristic_v2"
           if [ "${{ inputs.profile }}" = "release" ]; then
-            cargo build --release --locked -p warp --bin warp-oss
-            echo "EXE=target/release/warp-oss.exe" >> "$GITHUB_ENV"
+            cargo build --release --locked -p warp --bin warp-oss --features "$FEATURES"
+            echo "OUTDIR=target/release" >> "$GITHUB_ENV"
           else
-            cargo build --locked -p warp --bin warp-oss
-            echo "EXE=target/debug/warp-oss.exe" >> "$GITHUB_ENV"
+            cargo build --locked -p warp --bin warp-oss --features "$FEATURES"
+            echo "OUTDIR=target/debug" >> "$GITHUB_ENV"
           fi
 
-      - name: Upload warp-oss.exe
+      # Assemble a self-contained portable folder: the exe plus the Windows
+      # runtime files that app/build.rs copies next to it (ConPTY, DirectX
+      # shader compiler, VC runtime). Fonts are embedded in the exe itself.
+      - name: Stage portable package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "$OUTDIR/warp-oss.exe" dist/
+          for f in conpty.dll OpenConsole.exe dxcompiler.dll dxil.dll \
+                   msvcp140.dll vcruntime140.dll vcruntime140_1.dll; do
+            if [ -f "$OUTDIR/$f" ]; then cp "$OUTDIR/$f" dist/; fi
+          done
+          echo "Staged:"; ls -la dist/
+
+      - name: Upload warp-oss portable
         uses: actions/upload-artifact@v4
         with:
-          name: warp-oss-windows-${{ inputs.profile }}
-          path: ${{ env.EXE }}
+          name: warp-oss-windows-${{ inputs.profile }}-portable
+          path: dist/**
           if-no-files-found: error
