@@ -1,0 +1,64 @@
+name: Build Windows (warp-oss.exe)
+
+# Manual only — there is intentionally NO automatic build trigger.
+# Run it from the Actions tab (or `gh workflow run build-windows.yml`).
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Cargo profile"
+        type: choice
+        options: [dev, release]
+        default: dev
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 180
+    env:
+      # Mirror upstream CI: override .cargo/config.toml rustflags (which include a
+      # macOS-only linker arg that breaks MSVC linking) and keep debug info small.
+      RUSTFLAGS: "-C debuginfo=line-tables-only --cfg=web_sys_unstable_apis"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout (with LFS assets)
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      # windows-latest ships MSVC + Windows SDK + CMake preinstalled, so we only
+      # need the pinned Rust toolchain (rust-toolchain.toml -> 1.92.0).
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        shell: bash
+        run: rustup show
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: warp-oss-windows
+
+      - name: Build warp-oss
+        shell: bash
+        env:
+          # Lets the Sentry SDK build step (still a compile-time dependency, even
+          # though we never initialize it) fetch its binaries without rate limits.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.profile }}" = "release" ]; then
+            cargo build --release --locked -p warp --bin warp-oss
+            echo "EXE=target/release/warp-oss.exe" >> "$GITHUB_ENV"
+          else
+            cargo build --locked -p warp --bin warp-oss
+            echo "EXE=target/debug/warp-oss.exe" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload warp-oss.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: warp-oss-windows-${{ inputs.profile }}
+          path: ${{ env.EXE }}
+          if-no-files-found: error
