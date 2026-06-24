@@ -31,9 +31,19 @@ jobs:
 
       # windows-latest ships MSVC + Windows SDK + CMake preinstalled, so we only
       # need the pinned Rust toolchain (rust-toolchain.toml -> 1.92.0).
+      - name: Enable long paths (Warp has deep source paths)
+        shell: bash
+        run: git config --system core.longpaths true
+
       - name: Install Rust toolchain (from rust-toolchain.toml)
         shell: bash
         run: rustup show
+
+      # A transitive build-dep (warp_multi_agent_api) compiles protobufs and needs protoc.
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
